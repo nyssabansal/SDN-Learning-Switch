@@ -28,37 +28,38 @@ def _handle_PacketIn(event):
     # --- Forwarding logic ---
     if dst in mac_to_port[dpid]:
         out_port = mac_to_port[dpid][dst]
-        log.info("FORWARDING: Switch %s | %s -> %s | Port %s -> Port %s",
+        log.info("FORWARDING: Switch %s | %s -> %s | In Port %s -> Out Port %s",
                  dpid_to_str(dpid), src, dst, in_port, out_port)
 
-        # Install a flow rule so future packets are handled by the switch directly
+        # Install a flow rule
         msg = of.ofp_flow_mod()
         msg.match = of.ofp_match.from_packet(packet, in_port)
-        msg.idle_timeout = 10   # Remove rule after 10s of inactivity
-        msg.hard_timeout = 30   # Remove rule after 30s regardless
+        msg.idle_timeout = 10
+        msg.hard_timeout = 30
         msg.actions.append(of.ofp_action_output(port=out_port))
-        msg.data = event.ofp    # Send the current packet too
+        msg.data = event.ofp
         event.connection.send(msg)
         log.info("FLOW RULE INSTALLED: Switch %s | %s -> Port %s", dpid_to_str(dpid), dst, out_port)
 
     else:
-        # Destination unknown — flood
-        out_port = of.OFPP_FLOOD
         log.info("FLOODING: Switch %s | %s unknown, flooding all ports", dpid_to_str(dpid), dst)
-
         msg = of.ofp_packet_out()
         msg.data = event.ofp
-        msg.actions.append(of.ofp_action_output(port=out_port))
+        msg.actions.append(of.ofp_action_output(port=of.OFPP_FLOOD))
         event.connection.send(msg)
 
 def _print_mac_table(dpid):
-    """Print the current MAC-to-port table for a switch."""
-    log.info("--- MAC TABLE for Switch %s ---", dpid_to_str(dpid))
-    if not mac_to_port.get(dpid):
-        log.info("  (empty)")
+    """Print the MAC-to-port table in a formatted way."""
+    log.info("")
+    log.info("+===========================================+")
+    log.info("|     MAC TABLE - Switch %-18s|", dpid_to_str(dpid))
+    log.info("+=======================+===================+")
+    log.info("| %-21s | %-17s |", "MAC Address", "Port")
+    log.info("+=======================+===================+")
     for mac, port in mac_to_port[dpid].items():
-        log.info("  MAC: %s  ->  Port: %s", mac, port)
-    log.info("-------------------------------")
+        log.info("| %-21s | %-17s |", mac, port)
+    log.info("+=======================+===================+")
+    log.info("")
 
 def _handle_ConnectionUp(event):
     log.info("Switch %s connected.", dpid_to_str(event.dpid))
