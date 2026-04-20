@@ -43,6 +43,7 @@ def _handle_PacketIn(event):
             msg.match = of.ofp_match.from_packet(packet, in_port)
             msg.idle_timeout = 10
             msg.hard_timeout = 30
+            msg.flags = of.OFPFF_SEND_FLOW_REM  # notify controller when rule expires
             msg.actions.append(of.ofp_action_output(port=out_port))
             msg.data = event.ofp
             event.connection.send(msg)
@@ -52,6 +53,7 @@ def _handle_PacketIn(event):
             msg.match = of.ofp_match.from_packet(packet, in_port)
             msg.idle_timeout = 10
             msg.hard_timeout = 30
+            msg.flags = of.OFPFF_SEND_FLOW_REM  # notify controller when rule expires
             msg.actions.append(of.ofp_action_output(port=out_port))
             msg.data = event.ofp
             event.connection.send(msg)
