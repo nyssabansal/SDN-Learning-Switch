@@ -7,6 +7,9 @@ log = core.getLogger()
 # MAC to port table: { dpid: { mac: port } }
 mac_to_port = {}
 
+# Track already-installed flow rules to avoid duplicate logs
+installed_flows = set()
+
 def _handle_PacketIn(event):
     packet = event.parsed
     dpid = event.connection.dpid
@@ -19,69 +22,74 @@ def _handle_PacketIn(event):
     if dpid not in mac_to_port:
         mac_to_port[dpid] = {}
 
-    # --- Dynamically Learn MAC address ---
+    # --- Learn MAC address (only log if NEW) ---
     if mac_to_port[dpid].get(src) != in_port:
         mac_to_port[dpid][src] = in_port
-        log.info("LEARNED: Switch %s | MAC %s -> Port %s", dpid_to_str(dpid), src, in_port)
+        log.info("NEW MAC LEARNED: %s is on Port %s", src, in_port)
         _print_mac_table(dpid)
 
     # --- Forwarding logic ---
     if dst in mac_to_port[dpid]:
         out_port = mac_to_port[dpid][dst]
 
-        # Show the path taken
-        _print_path(dpid, src, dst, in_port, out_port)
+        # Only show path and install rule if not done before
+        flow_key = (dpid, str(src), str(dst), in_port)
+        if flow_key not in installed_flows:
+            installed_flows.add(flow_key)
+            _print_path(dpid, src, dst, in_port, out_port)
 
-        # Install a forwarding rule on the switch
-        msg = of.ofp_flow_mod()
-        msg.match = of.ofp_match.from_packet(packet, in_port)
-        msg.idle_timeout = 10
-        msg.hard_timeout = 30
-        msg.actions.append(of.ofp_action_output(port=out_port))
-        msg.data = event.ofp
-        event.connection.send(msg)
-        log.info("FLOW RULE INSTALLED on Switch %s: packets from %s to %s -> forward to Port %s",
-                 dpid_to_str(dpid), src, dst, out_port)
+            # Install forwarding rule on switch
+            msg = of.ofp_flow_mod()
+            msg.match = of.ofp_match.from_packet(packet, in_port)
+            msg.idle_timeout = 10
+            msg.hard_timeout = 30
+            msg.actions.append(of.ofp_action_output(port=out_port))
+            msg.data = event.ofp
+            event.connection.send(msg)
+            log.info("RULE INSTALLED: %s -> %s via Port %s", src, dst, out_port)
+        else:
+            # Rule already installed, switch handles it — no need to log
+            msg = of.ofp_flow_mod()
+            msg.match = of.ofp_match.from_packet(packet, in_port)
+            msg.idle_timeout = 10
+            msg.hard_timeout = 30
+            msg.actions.append(of.ofp_action_output(port=out_port))
+            msg.data = event.ofp
+            event.connection.send(msg)
 
     else:
-        # Destination unknown — flood
-        log.info("")
-        log.info("  PATH: [%s] --Port %s--> [Switch %s] --FLOOD--> [ALL PORTS]",
-                 src, in_port, dpid_to_str(dpid))
-        log.info("  (Destination %s unknown, flooding...)", dst)
-        log.info("")
+        # Only log flood once per unknown destination
+        flood_key = (dpid, str(dst))
+        if flood_key not in installed_flows:
+            installed_flows.add(flood_key)
+            log.info("UNKNOWN DEST: %s not in table, flooding all ports", dst)
+
         msg = of.ofp_packet_out()
         msg.data = event.ofp
         msg.actions.append(of.ofp_action_output(port=of.OFPP_FLOOD))
         event.connection.send(msg)
 
 def _print_path(dpid, src, dst, in_port, out_port):
-    """Print the forwarding path taken for a packet."""
     log.info("")
-    log.info("+-------------------------------------------------------+")
-    log.info("|                    PATH TAKEN                         |")
-    log.info("+-------------------------------------------------------+")
-    log.info("|  Source MAC  : %-38s|", src)
-    log.info("|  Dest MAC    : %-38s|", dst)
-    log.info("|  Switch      : %-38s|", dpid_to_str(dpid))
-    log.info("|  In  Port    : %-38s|", in_port)
-    log.info("|  Out Port    : %-38s|", out_port)
-    log.info("+-------------------------------------------------------+")
-    log.info("|  [%s] --Port %s--> [Switch] --Port %s--> [%s]", src, in_port, out_port, dst)
-    log.info("+-------------------------------------------------------+")
+    log.info("+--------------------------------------------------+")
+    log.info("|                  PATH TAKEN                      |")
+    log.info("+--------------------------------------------------+")
+    log.info("|  From  : %-40s|", src)
+    log.info("|  To    : %-40s|", dst)
+    log.info("|  Path  : Port %-3s --> [Switch] --> Port %-8s|", in_port, out_port)
+    log.info("+--------------------------------------------------+")
     log.info("")
 
 def _print_mac_table(dpid):
-    """Print the MAC-to-port table in a formatted way."""
     log.info("")
-    log.info("+===========================================+")
-    log.info("|     MAC TABLE - Switch %-18s|", dpid_to_str(dpid))
-    log.info("+=======================+===================+")
-    log.info("| %-21s | %-17s |", "MAC Address", "Port")
-    log.info("+=======================+===================+")
+    log.info("+================================+")
+    log.info("|  MAC TABLE - Switch %-10s|", dpid_to_str(dpid))
+    log.info("+==================+============+")
+    log.info("| %-16s | %-10s |", "MAC Address", "Port")
+    log.info("+==================+============+")
     for mac, port in mac_to_port[dpid].items():
-        log.info("| %-21s | %-17s |", mac, port)
-    log.info("+=======================+===================+")
+        log.info("| %-16s | %-10s |", mac, port)
+    log.info("+==================+============+")
     log.info("")
 
 def _handle_ConnectionUp(event):
