@@ -19,7 +19,7 @@ def _handle_PacketIn(event):
     if dpid not in mac_to_port:
         mac_to_port[dpid] = {}
 
-    # --- Learn MAC address ---
+    # --- Dynamically Learn MAC address ---
     if mac_to_port[dpid].get(src) != in_port:
         mac_to_port[dpid][src] = in_port
         log.info("LEARNED: Switch %s | MAC %s -> Port %s", dpid_to_str(dpid), src, in_port)
@@ -28,10 +28,11 @@ def _handle_PacketIn(event):
     # --- Forwarding logic ---
     if dst in mac_to_port[dpid]:
         out_port = mac_to_port[dpid][dst]
-        log.info("FORWARDING: Switch %s | %s -> %s | In Port %s -> Out Port %s",
-                 dpid_to_str(dpid), src, dst, in_port, out_port)
 
-        # Install a flow rule
+        # Show the path taken
+        _print_path(dpid, src, dst, in_port, out_port)
+
+        # Install a forwarding rule on the switch
         msg = of.ofp_flow_mod()
         msg.match = of.ofp_match.from_packet(packet, in_port)
         msg.idle_timeout = 10
@@ -39,14 +40,36 @@ def _handle_PacketIn(event):
         msg.actions.append(of.ofp_action_output(port=out_port))
         msg.data = event.ofp
         event.connection.send(msg)
-        log.info("FLOW RULE INSTALLED: Switch %s | %s -> Port %s", dpid_to_str(dpid), dst, out_port)
+        log.info("FLOW RULE INSTALLED on Switch %s: packets from %s to %s -> forward to Port %s",
+                 dpid_to_str(dpid), src, dst, out_port)
 
     else:
-        log.info("FLOODING: Switch %s | %s unknown, flooding all ports", dpid_to_str(dpid), dst)
+        # Destination unknown — flood
+        log.info("")
+        log.info("  PATH: [%s] --Port %s--> [Switch %s] --FLOOD--> [ALL PORTS]",
+                 src, in_port, dpid_to_str(dpid))
+        log.info("  (Destination %s unknown, flooding...)", dst)
+        log.info("")
         msg = of.ofp_packet_out()
         msg.data = event.ofp
         msg.actions.append(of.ofp_action_output(port=of.OFPP_FLOOD))
         event.connection.send(msg)
+
+def _print_path(dpid, src, dst, in_port, out_port):
+    """Print the forwarding path taken for a packet."""
+    log.info("")
+    log.info("+-------------------------------------------------------+")
+    log.info("|                    PATH TAKEN                         |")
+    log.info("+-------------------------------------------------------+")
+    log.info("|  Source MAC  : %-38s|", src)
+    log.info("|  Dest MAC    : %-38s|", dst)
+    log.info("|  Switch      : %-38s|", dpid_to_str(dpid))
+    log.info("|  In  Port    : %-38s|", in_port)
+    log.info("|  Out Port    : %-38s|", out_port)
+    log.info("+-------------------------------------------------------+")
+    log.info("|  [%s] --Port %s--> [Switch] --Port %s--> [%s]", src, in_port, out_port, dst)
+    log.info("+-------------------------------------------------------+")
+    log.info("")
 
 def _print_mac_table(dpid):
     """Print the MAC-to-port table in a formatted way."""
