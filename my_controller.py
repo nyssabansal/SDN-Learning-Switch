@@ -48,7 +48,6 @@ def _handle_PacketIn(event):
             event.connection.send(msg)
             log.info("RULE INSTALLED: %s -> %s via Port %s", src, dst, out_port)
         else:
-            # Rule already installed, switch handles it — no need to log
             msg = of.ofp_flow_mod()
             msg.match = of.ofp_match.from_packet(packet, in_port)
             msg.idle_timeout = 10
@@ -68,6 +67,38 @@ def _handle_PacketIn(event):
         msg.data = event.ofp
         msg.actions.append(of.ofp_action_output(port=of.OFPP_FLOOD))
         event.connection.send(msg)
+
+def _handle_FlowRemoved(event):
+    """Called when a flow rule expires on the switch."""
+    match = event.ofp.match
+    dpid = event.connection.dpid
+
+    reason = event.ofp.reason
+    if reason == of.OFPRR_IDLE_TIMEOUT:
+        reason_str = "IDLE TIMEOUT (no traffic for 10s)"
+    elif reason == of.OFPRR_HARD_TIMEOUT:
+        reason_str = "HARD TIMEOUT (30s limit reached)"
+    elif reason == of.OFPRR_DELETE:
+        reason_str = "MANUALLY DELETED"
+    else:
+        reason_str = "UNKNOWN"
+
+    log.info("")
+    log.info("+--------------------------------------------------+")
+    log.info("|              FLOW RULE EXPIRED                   |")
+    log.info("+--------------------------------------------------+")
+    log.info("|  Switch  : %-38s|", dpid_to_str(dpid))
+    log.info("|  From    : %-38s|", match.dl_src)
+    log.info("|  To      : %-38s|", match.dl_dst)
+    log.info("|  Reason  : %-38s|", reason_str)
+    log.info("+--------------------------------------------------+")
+    log.info("")
+
+    # Remove from installed_flows so it can be reinstalled when needed
+    flow_key = (dpid, str(match.dl_src), str(match.dl_dst), match.in_port)
+    if flow_key in installed_flows:
+        installed_flows.discard(flow_key)
+        log.info("RULE REMOVED from tracking: %s -> %s", match.dl_src, match.dl_dst)
 
 def _print_path(dpid, src, dst, in_port, out_port):
     log.info("")
@@ -98,4 +129,5 @@ def _handle_ConnectionUp(event):
 def launch():
     core.openflow.addListenerByName("PacketIn", _handle_PacketIn)
     core.openflow.addListenerByName("ConnectionUp", _handle_ConnectionUp)
+    core.openflow.addListenerByName("FlowRemoved", _handle_FlowRemoved)
     log.info("Custom Learning Switch Controller Running")
